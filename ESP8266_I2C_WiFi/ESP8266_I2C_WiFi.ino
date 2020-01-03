@@ -7,8 +7,8 @@
 #include <ESP8266WiFi.h>
 
 // Hier geben wir den WLAN Namen (SSID) und den Zugansschlüssel ein
-const char* ssid     = "Amaranth";
-const char* password = "2256654690724849";
+const char* ssid     = "xx";
+const char* password = "xx";
 
 // Wir setzen den Webserver auf Port 80
 WiFiServer server(80);
