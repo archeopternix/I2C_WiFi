@@ -10,7 +10,7 @@
 const char* ssid     = "xx";
 const char* password = "xx";
 
-#define PULSELENGHT 300 // default for pulselength to avoid burnout of relais
+#define PULSELENGTH 300 // default for pulselength to avoid burnout of relais
 
 // Wir setzen den Webserver auf Port 80
 WiFiServer server(80);
@@ -34,10 +34,23 @@ typedef struct relais_t
 relais_t[8] Relais;		// max 8 relais can be connected to 1 I2C bus
 byte numrelais =0;		// amount of connected relais
 
+struct timer_t {
+	byte relais;
+	byte pin;
+	unsigned long starttime;
+	int pulselength; 	// length in ms
+};
+
+timer_t Timer;
+
 void setup() {
   Serial.begin(115200);
 
   while (!Serial);             // wait for serial monitor
+ 
+	Timer.starttime=0;
+	Timer.pin=255;
+	Timer.relais=255;
  
   // Per WLAN mit dem Netzwerk verbinden
   Serial.print("Connecting to ");
@@ -99,16 +112,34 @@ void loop(){
             client.println("Connection: close");
             client.println();
 
-           for (int i=0; i<8; i++) {            
-              String num = String(i);
-              if (header.indexOf("GET /"+num + "/on") >= 0) {
-                Serial.println(num + " on");
-                bitWrite(turnout,i,true);                                   
-              } else if (header.indexOf("GET /"+num + "/off") >= 0) {
-                Serial.println(num + " off");
-                bitWrite(turnout,i,false);                                   
-              }
-           }
+			// iterate through all found I2C relais
+			if ((Timer.starttime + Timer.pulselength) > Time()) {
+				switchRelais(Timer.relais,Timer.pin,false);
+				Timer.starttime=0;
+				Timer.pin=255;
+				Timer.relais=255;	
+				Timer.pulselength=0;				
+			} else if (Timer.starttime == 0 ) {
+				for (int r=0; r<numrelais; r++) { 
+				   for (int i=0; i< Relais[r].bitcount; i++) {           
+					  String num = String(i);
+					  String rel = String(r);
+					  if (header.indexOf("GET /"+ rel + "/" +num + "/on") >= 0) {
+						Timer.starttime=Time();
+						Timer.pin=i;
+						Timer.relais=r;
+						Timer.pulselength=Relais[r].pulselength
+						switchRelais(Timer.relais,Timer.pin,true);                     
+					  } else if (header.indexOf("GET /"+ rel + "/" +num + "/off") >= 0) {
+						Timer.starttime=Time();
+						Timer.pin=i;
+						Timer.relais=r;
+						Timer.pulselength=Relais[r].pulselength
+						switchRelais(Timer.relais,Timer.pin,false);                              
+					  }
+				   }
+				}
+			}
             
 			printHTMLhead(client)
             
@@ -175,7 +206,7 @@ void checkI2Cbus() {
 		Relais[numrelais].baseaddr = address;
 		Relais[numrelais].status[0] = 0b00000000;
 		Relais[numrelais].status[1] = 0b00000000;
-		Relais[numrelais].pulselength = PULSELENGHT;
+		Relais[numrelais].pulselength = PULSELENGTH;
 		Relais[numrelais].bitcount = 8;		
         numrelais++;
         break;
@@ -192,35 +223,48 @@ void checkI2Cbus() {
     Serial.println(F("No I2C devices found\n"));
 }
 
-void writeI2C(byte device,byte lowbyte,byte highbyte) {
-  byte error;
-  
-  Wire.beginTransmission(device); 
-  
-  Wire.write(lowbyte);                  // sends low byte
-  Wire.write(highbyte);                 // sends high byte
+void switchRelais(byte relais,byte pin, bool state) {
+	byte error;
 
-  error = Wire.endTransmission();       // stop transmitting
-  switch (error) {
-    case 0:
-      Serial.print(F("Success updating device with address: 0x"));
-      Serial.print(device,HEX);
-      Serial.print(" - value:");
-      Serial.print(lowbyte,BIN);        
-      Serial.println(highbyte,BIN);        
-      break;
-    case 1:
-      Serial.println(F("data too long to fit in transmit buffer"));
-      break;
-    case 2:
-      Serial.println(F("received NACK on transmit of address"));
-      break;
-    case 3:
-      Serial.println(F("received NACK on transmit of data"));
-      break;
-    default:
-      Serial.println("other error ");
-  }
+	if (state) {
+		if (pin > 7) {
+			bitClear(Relais[numrelais].status[1], pin - 8);
+		} else {
+			bitClear(Relais[numrelais].status[0], pin);			
+		}
+	} else {
+		if (pin > 7) {
+			bitSet(Relais[numrelais].status[1], pin - 8);
+		} else {
+			bitSet(Relais[numrelais].status[0], pin);			
+		}
+	}
+	  
+	Wire.beginTransmission(Relais[numrelais].baseaddr); 
+	Wire.write(Relais[numrelais].status[0]);                  // sends low byte
+	Wire.write(Relais[numrelais].status[1]);                 // sends high byte
+	error = Wire.endTransmission();       // stop transmitting
+	
+	switch (error) {
+		case 0:
+		  Serial.print(F("Success updating relais with address: 0x"));
+		  Serial.print(Relais[numrelais].baseaddr,HEX);
+		  Serial.print(" - value:");
+		  Serial.print(Relais[numrelais].status[0],BIN);        
+		  Serial.println(Relais[numrelais].status[1],BIN);        
+		  break;
+		case 1:
+		  Serial.println(F("data too long to fit in transmit buffer"));
+		  break;
+		case 2:
+		  Serial.println(F("received NACK on transmit of address"));
+		  break;
+		case 3:
+		  Serial.println(F("received NACK on transmit of data"));
+		  break;
+		default:
+		  Serial.println("other error ");
+	}
 }
 
 
