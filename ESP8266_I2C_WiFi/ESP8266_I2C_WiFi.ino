@@ -10,27 +10,35 @@
 const char* ssid     = "xx";
 const char* password = "xx";
 
+#define PULSELENGHT 300 // default for pulselength to avoid burnout of relais
+
 // Wir setzen den Webserver auf Port 80
 WiFiServer server(80);
 
 // Eine Variable um den HTTP Request zu speichern
 String header;
 
+// Schaltstatus der einzelnen Weichen
 byte turnout = 0b00000000;
 
+// Scan I2C Bus when started (in the loop)
+bool firstrun = true;
 
-// Die verwendeted GPIO Pins
-// D1 = GPIO5 und D2 = GPIO4 - einfach bei Google nach "Amica Pinout" suchen  
-const int led13 = 5;
+typedef struct relais_t
+{
+	byte baseaddr;		// I2C baseaddress	
+	byte[2] status; 	// for 16 bit I2C device [LOW,HIGH]
+	int pulselength; 	// length in ms
+	byte bitcount;		// how many bits are active (8 or 16)
+};
+relais_t[8] Relais;		// max 8 relais can be connected to 1 I2C bus
+byte numrelais =0;		// amount of connected relais
 
 void setup() {
   Serial.begin(115200);
-  // Die definierten GPIO Pins als output definieren ...
-  pinMode(led13, OUTPUT);
-  // ... und erstmal auf LOW setzen
-  digitalWrite(led13, LOW);
 
-
+  while (!Serial);             // wait for serial monitor
+ 
   // Per WLAN mit dem Netzwerk verbinden
   Serial.print("Connecting to ");
   Serial.println(ssid);
@@ -47,8 +55,30 @@ void setup() {
   server.begin();
 }
 
+void printHTMLhead(WiFiClient *client) {
+	// Hier wird nun die HTML Seite angezeigt:
+	client.println("<!DOCTYPE html><html>");
+	client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+	client.println("<link rel=\"icon\" href=\"data:,\">");
+	// Es folgen der CSS-Code um die Ein/Aus Buttons zu gestalten
+	// Hier können Sie die Hintergrundfarge (background-color) und Schriftgröße (font-size) anpassen
+	client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
+	client.println(".button { background-color: #333344; border: none; color: white; padding: 16px 40px;");
+	client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
+	client.println(".button2 {background-color: #888899;}</style></head>");
+	
+	// Webseiten-Überschrift
+	client.println("<body><h1>ESP8266 Web Server</h1>");
+}
+
 void loop(){
   WiFiClient client = server.available();   // Hört auf Anfragen von Clients
+
+  // check the I2C bus and collect relais informations
+  if (firstrun) {
+    checkI2Cbus();
+    firstrun = false;
+  }
 
   if (client) {                             // Falls sich ein neuer Client verbindet,
     Serial.println("Neuer Client.");          // Ausgabe auf den seriellen Monitor
@@ -74,41 +104,30 @@ void loop(){
               if (header.indexOf("GET /"+num + "/on") >= 0) {
                 Serial.println(num + " on");
                 bitWrite(turnout,i,true);                                   
-                digitalWrite(led13, HIGH);
               } else if (header.indexOf("GET /"+num + "/off") >= 0) {
                 Serial.println(num + " off");
                 bitWrite(turnout,i,false);                                   
-                digitalWrite(led13, LOW);
               }
            }
             
-            // Hier wird nun die HTML Seite angezeigt:
-            client.println("<!DOCTYPE html><html>");
-            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-            client.println("<link rel=\"icon\" href=\"data:,\">");
-            // Es folgen der CSS-Code um die Ein/Aus Buttons zu gestalten
-            // Hier können Sie die Hintergrundfarge (background-color) und Schriftgröße (font-size) anpassen
-            client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
-            client.println(".button { background-color: #333344; border: none; color: white; padding: 16px 40px;");
-            client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
-            client.println(".button2 {background-color: #888899;}</style></head>");
+			printHTMLhead(client)
             
-            // Webseiten-Überschrift
-            client.println("<body><h1>ESP8266 Web Server</h1>");
-            
-            // Zeige den aktuellen Status, und AN/AUS Buttons for GPIO 5  
-    
-            
-            for (int i=0; i<8; i++) {            
-              String num = String(i);
-              client.print("<p><a href=\"/" + num);
-              if (bitRead(turnout,i)==true) {
-                  client.println("/off\"><button class=\"button\">"+num+" AUS</button></a></p>");     
-              } else {
-                  client.println("/on\"><button class=\"button\">"+num+" EIN</button></a></p>");                         
-              }     
+			// iterate through all found I2C relais
+			for (int r=0; r<numrelais; r++) { 
+				client.print("<h2>\"Relais :" + rel + "</h2>");
+				// Zeige den aktuellen Status, und AN/AUS Buttons  
+				for (int i=0; i< Relais[r].bitcount; i++) {            
+				  String num = String(i);
+				  String rel = String(r);
+				  client.print("<p><a href=\"/" + rel + "/"+ num);
+				  if (bitRead(turnout,i)==true) {
+					  client.println("/off\"><button class=\"button\">"+num+" AUS</button></a></p>");     
+				  } else {
+					  client.println("/on\"><button class=\"button\">"+num+" EIN</button></a></p>");                         
+				  }     
+				}
             }
-                           
+			
             // Die HTTP-Antwort wird mit einer Leerzeile beendet
             client.println();
             // und wir verlassen mit einem break die Schleife
@@ -127,6 +146,80 @@ void loop(){
     client.stop();
     Serial.println("Client getrennt.");
     Serial.println("");
+  }
+}
+
+void checkI2Cbus() {
+  byte error, address;
+  numrelais =0;
+  
+  Serial.print("Scanning I2C bus");
+  for(address = 1; address < 127; address++ )
+  {
+    Serial.print(".");
+    // The i2c_scanner uses the return value of
+    // the Write.endTransmisstion to see if
+    // a device did acknowledge to the address.
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+
+    switch (error) {
+      case 0:
+        Serial.println();
+        Serial.print(F("I2C device found at address 0x"));
+        if (address<16)
+          Serial.print("0");
+        Serial.print(address,HEX);
+        Serial.println("  !");
+        Serial.print("Scanning");
+		Relais[numrelais].baseaddr = address;
+		Relais[numrelais].status[0] = 0b00000000;
+		Relais[numrelais].status[1] = 0b00000000;
+		Relais[numrelais].pulselength = PULSELENGHT;
+		Relais[numrelais].bitcount = 8;		
+        numrelais++;
+        break;
+      case 4:
+        Serial.print(F("Unknown error at address 0x"));
+        if (address<16)
+          Serial.print("0");
+        Serial.println(address,HEX);
+        break;
+    }
+  }
+  Serial.println();
+  if (numrelais == 0)
+    Serial.println(F("No I2C devices found\n"));
+}
+
+void writeI2C(byte device,byte lowbyte,byte highbyte) {
+  byte error;
+  
+  Wire.beginTransmission(device); 
+  
+  Wire.write(lowbyte);                  // sends low byte
+  Wire.write(highbyte);                 // sends high byte
+
+  error = Wire.endTransmission();       // stop transmitting
+  switch (error) {
+    case 0:
+      Serial.print(F("Success updating device with address: 0x"));
+      Serial.print(device,HEX);
+      Serial.print(" - value:");
+      Serial.print(lowbyte,BIN);        
+      Serial.println(highbyte,BIN);        
+      break;
+    case 1:
+      Serial.println(F("data too long to fit in transmit buffer"));
+      break;
+    case 2:
+      Serial.println(F("received NACK on transmit of address"));
+      break;
+    case 3:
+      Serial.println(F("received NACK on transmit of data"));
+      break;
+    default:
+      Serial.println("other error ");
   }
 }
 
