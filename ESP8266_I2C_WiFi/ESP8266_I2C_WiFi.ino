@@ -100,7 +100,7 @@ void loop(){
   }
 
   // iterate through all found I2C relais
-  if ((Timer.starttime + Timer.pulselength) > millis()) {
+  if ((Timer.starttime > 0) && (millis() > (Timer.starttime + Timer.pulselength) )) {
     switchRelais(Timer.relais,Timer.pin);
     Timer.starttime=0;     
   }
