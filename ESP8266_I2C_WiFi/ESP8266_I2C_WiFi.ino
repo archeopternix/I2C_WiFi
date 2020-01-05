@@ -5,6 +5,7 @@
 
 // Wir laden die uns schon bekannte WiFi Bibliothek
 #include <ESP8266WiFi.h>
+#include <Wire.h>
 
 // Hier geben wir den WLAN Namen (SSID) und den Zugansschlüssel ein
 const char* ssid     = "xx";
@@ -27,21 +28,22 @@ bool firstrun = true;
 typedef struct relais_t
 {
 	byte baseaddr;		// I2C baseaddress	
-	byte[2] status; 	// for 16 bit I2C device [LOW,HIGH]
+	byte status[2]; 	// for 16 bit I2C device [LOW,HIGH]
 	int pulselength; 	// length in ms
 	byte bitcount;		// how many bits are active (8 or 16)
 };
-relais_t[8] Relais;		// max 8 relais can be connected to 1 I2C bus
+relais_t Relais[8];		// max 8 relais can be connected to 1 I2C bus
+
 byte numrelais =0;		// amount of connected relais
 
-struct timer_t {
+typedef struct timer_typ {
 	byte relais;
 	byte pin;
 	unsigned long starttime;
 	int pulselength; 	// length in ms
 };
 
-timer_t Timer;
+timer_typ Timer;
 
 void setup() {
   Serial.begin(115200);
@@ -70,18 +72,18 @@ void setup() {
 
 void printHTMLhead(WiFiClient *client) {
 	// Hier wird nun die HTML Seite angezeigt:
-	client.println("<!DOCTYPE html><html>");
-	client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-	client.println("<link rel=\"icon\" href=\"data:,\">");
+	client->println("<!DOCTYPE html><html>");
+	client->println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+	client->println("<link rel=\"icon\" href=\"data:,\">");
 	// Es folgen der CSS-Code um die Ein/Aus Buttons zu gestalten
 	// Hier können Sie die Hintergrundfarge (background-color) und Schriftgröße (font-size) anpassen
-	client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
-	client.println(".button { background-color: #333344; border: none; color: white; padding: 16px 40px;");
-	client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
-	client.println(".button2 {background-color: #888899;}</style></head>");
+	client->println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
+	client->println(".button { background-color: #333344; border: none; color: white; padding: 16px 40px;");
+	client->println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
+	client->println(".button2 {background-color: #888899;}</style></head>");
 	
 	// Webseiten-Überschrift
-	client.println("<body><h1>ESP8266 Web Server</h1>");
+	client->println("<body><h1>ESP8266 Web Server</h1>");
 }
 
 void loop(){
@@ -113,7 +115,7 @@ void loop(){
             client.println();
 
 			// iterate through all found I2C relais
-			if ((Timer.starttime + Timer.pulselength) > Time()) {
+			if ((Timer.starttime + Timer.pulselength) > millis()) {
 				switchRelais(Timer.relais,Timer.pin,false);
 				Timer.starttime=0;
 				Timer.pin=255;
@@ -125,32 +127,36 @@ void loop(){
 					  String num = String(i);
 					  String rel = String(r);
 					  if (header.indexOf("GET /"+ rel + "/" +num + "/on") >= 0) {
-						Timer.starttime=Time();
-						Timer.pin=i;
-						Timer.relais=r;
-						Timer.pulselength=Relais[r].pulselength
-						switchRelais(Timer.relais,Timer.pin,true);                     
+  						Timer.starttime=millis();
+  						Timer.pin=i;
+  						Timer.relais=r;
+  						Timer.pulselength=Relais[r].pulselength;
+  						switchRelais(Timer.relais,Timer.pin,true);                     
 					  } else if (header.indexOf("GET /"+ rel + "/" +num + "/off") >= 0) {
-						Timer.starttime=Time();
-						Timer.pin=i;
-						Timer.relais=r;
-						Timer.pulselength=Relais[r].pulselength
-						switchRelais(Timer.relais,Timer.pin,false);                              
+  						Timer.starttime=millis();
+  						Timer.pin=i;
+  						Timer.relais=r;
+  						Timer.pulselength=Relais[r].pulselength;
+  						switchRelais(Timer.relais,Timer.pin,false);                              
 					  }
 				   }
 				}
 			}
             
-			printHTMLhead(client)
+			printHTMLhead(&client);
             
 			// iterate through all found I2C relais
-			for (int r=0; r<numrelais; r++) { 
+			for (int r = 0; r < numrelais; r++) { 
+        String rel = String(r);
+
 				client.print("<h2>\"Relais :" + rel + "</h2>");
+       
 				// Zeige den aktuellen Status, und AN/AUS Buttons  
 				for (int i=0; i< Relais[r].bitcount; i++) {            
 				  String num = String(i);
-				  String rel = String(r);
+         
 				  client.print("<p><a href=\"/" + rel + "/"+ num);
+				 
 				  if (bitRead(turnout,i)==true) {
 					  client.println("/off\"><button class=\"button\">"+num+" AUS</button></a></p>");     
 				  } else {
