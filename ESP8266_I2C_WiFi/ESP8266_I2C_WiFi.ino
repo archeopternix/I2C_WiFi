@@ -1,9 +1,10 @@
 /*********
-  Rui Santos
+  D.O.CRui
+  based on the sample of Rui Santos
   Complete project details at http://randomnerdtutorials.com  
 *********/
 
-// Wir laden die uns schon bekannte WiFi Bibliothek
+// WiFi library
 #include <ESP8266WiFi.h>
 #include <Wire.h>
 
@@ -15,10 +16,10 @@ const char* password = "2256654690724849";
 
 #define PULSELENGTH 1000 // default for pulselength to avoid burnout of relais
 
-// Wir setzen den Webserver auf Port 80
+// Port of webserver: 80
 WiFiServer server(80);
 
-// Eine Variable um den HTTP Request zu speichern
+// stores the HTTP Request 
 String header;
 
 
@@ -28,7 +29,7 @@ bool firstrun = true;
 typedef struct relais_t
 {
 	byte baseaddr;		// I2C baseaddress	
-	byte status[2]; 	// for 16 bit I2C device [LOW,HIGH]
+	word status; 		// for 16 bit I2C device [LOW,HIGH]
 	int pulselength; 	// length in ms
 	byte bitcount;		// how many bits are active (8 or 16)
 };
@@ -36,40 +37,41 @@ relais_t Relais[8];		// max 8 relais can be connected to 1 I2C bus
 
 byte numrelais =0;		// amount of connected relais
 
+// is used to send PULSELENGTH pulses to the relais
 typedef struct timer_typ {
 	byte relais;
 	byte pin;
 	unsigned long starttime;
 	int pulselength; 	// length in ms
 };
-
 timer_typ Timer;
 
 void setup() {
-  Serial.begin(115200);
+	Serial.begin(115200);
 
-  while (!Serial);             // wait for serial monitor
+	while (!Serial);        // wait for serial monitor !!remove for production!!
 
-  Wire.begin();
+	Wire.begin();			// Initialize the I2C library
 
 	Timer.starttime=0;
 	Timer.pin=255;
 	Timer.relais=255;
- 
-  // Per WLAN mit dem Netzwerk verbinden
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  // Die IP vom Webserver auf dem seriellen Monitor ausgeben
-  Serial.println("");
-  Serial.println("WLAN verbunden.");
-  Serial.println("IP Adresse: ");
-  Serial.println(WiFi.localIP());
-  server.begin();
+	 
+	// Per WLAN mit dem Netzwerk verbinden
+	Serial.print("Connecting to ");
+	Serial.println(ssid);
+	WiFi.begin(ssid, password);
+	while (WiFi.status() != WL_CONNECTED) {
+		delay(500);
+		Serial.print(".");
+	}
+	// Die IP vom Webserver auf dem seriellen Monitor ausgeben
+	Serial.println("");
+	Serial.println("WLAN verbunden.");
+	Serial.println("IP Adresse: ");
+	Serial.println(WiFi.localIP());
+	
+	server.begin();
 }
 
 void printHTMLhead(WiFiClient *client) {
@@ -99,10 +101,8 @@ void loop(){
 
   // iterate through all found I2C relais
   if ((Timer.starttime + Timer.pulselength) > millis()) {
-    switchRelais(Timer.relais,Timer.pin,true);
-    Timer.starttime=0;
-    Timer.pin=255;
-    Timer.relais=255;         
+    switchRelais(Timer.relais,Timer.pin);
+    Timer.starttime=0;     
   }
 
   if (client) {                             // Falls sich ein neuer Client verbindet,
@@ -124,8 +124,8 @@ void loop(){
             client.println("Connection: close");
             client.println();
 
-			// iterate through all found I2C relais
-      if (Timer.starttime < 1) {
+			// iterate through all found I2C relais when no timer is set
+			if (Timer.starttime < 1) {
 				for (int r=0; r<numrelais; r++) { 
 				   for (int i=0; i< Relais[r].bitcount; i++) {           
 					  String num = String(i);
@@ -135,13 +135,7 @@ void loop(){
   						Timer.pin=i;
   						Timer.relais=r;
   						Timer.pulselength=Relais[r].pulselength;
-  						switchRelais(r,i,false);                     
-					  } else if (header.indexOf("GET /"+ rel + "/" +num + "/off") >= 0) {
-  						Timer.starttime=millis();
-  						Timer.pin=i;
-  						Timer.relais=r;
-  						Timer.pulselength=Relais[r].pulselength;
-  						switchRelais(r,i,true);                              
+  						switchRelais(r,i);                   
 					  }
 				   }
 				}
@@ -151,21 +145,13 @@ void loop(){
             
 			// iterate through all found I2C relais
 			for (int r = 0; r < numrelais; r++) { 
-        String rel = String(r);
-
+				String rel = String(r);
 				client.print("<h2>\"Relais :" + rel + "</h2>");
        
-				// Zeige den aktuellen Status, und AN/AUS Buttons  
+				// Zeige den aktuellen Status, und AN Buttons  
 				for (int i=0; i< Relais[r].bitcount; i++) {            
-				  String num = String(i);
-         
-				  client.print("<p><a href=\"/" + rel + "/"+ num);
-				 
-				  if (bitRead(Relais[r].status[0] ,i)==true) {
-					  client.println("/off\"><button class=\"button\">"+num+" AUS</button></a></p>");     
-				  } else {
-					  client.println("/on\"><button class=\"button\">"+num+" EIN</button></a></p>");                         
-				  }     
+				  String num = String(i);         
+				  client.print("<p><a href=\"/" + rel + "/"+ num + "/on\"><button class=\"button\">"+num+" EIN</button></a></p>");                         
 				}
             }
 			
@@ -211,8 +197,7 @@ void checkI2Cbus() {
         Serial.print(address,HEX);
         Serial.println("  !");
     		Relais[numrelais].baseaddr = address;
-    		Relais[numrelais].status[0] = 0b11111111;
-    		Relais[numrelais].status[1] = 0b11111111;
+    		Relais[numrelais].status = 0b1111111111111111;
     		Relais[numrelais].pulselength = PULSELENGTH;
     		Relais[numrelais].bitcount = 8;		
         numrelais++;
@@ -231,34 +216,24 @@ void checkI2Cbus() {
     Serial.println(F("No I2C devices found\n"));
 }
 
-void switchRelais(byte relais,byte pin, bool state) {
+void switchRelais(byte relais,byte pin) {
 	byte error;
-
-	if (state) {
-		if (pin > 7) {
-			bitClear(Relais[relais].status[1], pin - 8);
-		} else {
-			bitClear(Relais[relais].status[0], pin);			
-		}
+	
+	if (bitRead(Relais[relais].status, pin)) {
+		bitClear(Relais[relais].status, pin);
 	} else {
-		if (pin > 7) {
-			bitSet(Relais[relais].status[1], pin - 8);
-		} else {
-			bitSet(Relais[relais].status[0], pin);			
-		}
+		bitSet(Relais[relais].status, pin );
 	}
 	  
 	Wire.beginTransmission(Relais[relais].baseaddr); 
-	Wire.write(Relais[relais].status[0]);                  // sends low byte
-	Wire.write(Relais[relais].status[1]);                 // sends high byte
+	Wire.write(lowByte(Relais[relais].status));                  // sends low byte
+	Wire.write(highByte(Relais[relais].status));                 // sends high byte
 	error = Wire.endTransmission();       // stop transmitting
 
-  Serial.print(F("relais with address: 0x"));
-  Serial.print(Relais[relais].baseaddr,HEX);
-  Serial.print(" - value:");
-  Serial.print(Relais[relais].status[0],BIN);        
-  Serial.print(" : ");
-  Serial.println(Relais[relais].status[1],BIN);        
+	Serial.print(F("relais with address: 0x"));
+	Serial.print(Relais[relais].baseaddr,HEX);
+	Serial.print(" - value:");
+	Serial.print(Relais[relais].status,BIN);        
   
 	switch (error) {
 		case 0:
